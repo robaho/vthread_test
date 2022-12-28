@@ -22,8 +22,9 @@ public class RingBuffer<T> {
 
     public boolean offer(T t) {
         int _tail = tail.get();
-        if(ring.get(_tail)==null){
-            if(tail.compareAndSet(_tail,next(_tail))){
+        int _next_tail = next(_tail);
+        if(ring.get(_tail)==null && _next_tail!=head){
+            if(tail.compareAndSet(_tail,_next_tail)){
                 if(!ring.compareAndSet(_tail,null,t)) {
                     throw new IllegalStateException("CAS failed");
                 }
