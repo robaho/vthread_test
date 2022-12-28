@@ -7,20 +7,21 @@ public class VThreadTest implements Runnable {
     final List<Consumer> consumers = new ArrayList<>();
     final AtomicInteger counter = new AtomicInteger();
 
+    volatile Thread main;
+
     @Override
     public void run() {
+        main = Thread.currentThread();
+
         while(true) {
             try {
-                while(!queue.available()) {
-                    if(counter.get()==0)
-                        return;
-                }
                 Object o = queue.get();
                 for (Consumer c : consumers) {
                     c.submit(o);
                 }
             } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+                // expected when all consumers and producers complete
+                return;
             }
         }
     }
@@ -34,10 +35,15 @@ public class VThreadTest implements Runnable {
         @Override
         public void run() {
             for(int i=0;i<n_messages;i++) {
-                Object o = queue.get();
+                try {
+                    Object o = queue.get();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
             }
             System.out.println("consumer finished");
-            counter.decrementAndGet();
+            if(counter.decrementAndGet()==0)
+                main.interrupt();;
         }
         void submit(Object o) throws InterruptedException {
             queue.put(o);
@@ -55,7 +61,8 @@ public class VThreadTest implements Runnable {
                 queue.put(new Object());
             }
             System.out.println("producer finished");
-            counter.decrementAndGet();
+            if(counter.decrementAndGet()==0)
+                main.interrupt();;
         }
     }
     public VThreadTest(int n_producers, int n_consumers, int n_messages) {

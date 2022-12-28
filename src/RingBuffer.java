@@ -39,8 +39,8 @@ public class RingBuffer<T> {
             if(reader!=null) {
                 LockSupport.unpark(reader);
             }
-//            Thread.yield(); // does not help
-//            LockSupport.parkNanos(1); // allows the program to work correctly
+//            Thread.yield(); // does not help - works under jdk 20
+            LockSupport.parkNanos(1); // allows the program to work correctly
         }
         if(reader!=null) {
             LockSupport.unpark(reader);
@@ -53,12 +53,15 @@ public class RingBuffer<T> {
         head=next(head);
         return tmp;
     }
-    public T get() {
+    public T get() throws InterruptedException {
+//        spin();
         reader = Thread.currentThread();
         try {
             while (true) {
                 T t = poll();
                 if(t==null) {
+                    if(Thread.interrupted())
+                        throw new InterruptedException();
                     LockSupport.park();
                 } else {
                     return t;
@@ -72,8 +75,12 @@ public class RingBuffer<T> {
         return (++index)%size;
     }
 
-    public boolean available() {
-        // available can only be called by reader so this is ok
-        return tail.get()!=head || ring.get(head)!=null;
+    private void spin() {
+        for(int i=0;i<1000;i++) {
+            if (tail.get() != head || ring.get(head) != null) {
+                return;
+            }
+            LockSupport.parkNanos(1);
+        }
     }
 }
