@@ -1,79 +1,54 @@
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.LockSupport;
 
 /**
- * ring buffer designed for multiple writers and a single reader
+ * ring buffer using traditional synchronization primitives
  *
  * @param <T>
  */
 public class RingBuffer<T> {
-    private final AtomicReferenceArray<T> ring;
+    private final Object ring[];
     private int head;
-    private final AtomicInteger tail = new AtomicInteger();
+    private int tail;
     private final int size;
 
-    private volatile Thread reader;
-
     public RingBuffer(int size){
-        ring = new AtomicReferenceArray<>(size);
+        ring = new Object[size];
         this.size=size;
     }
 
-    public boolean offer(T t) {
-        int _tail = tail.get();
-        if(ring.get(_tail)==null){
-            if(tail.compareAndSet(_tail,next(_tail))){
-                if(!ring.compareAndSet(_tail,null,t)) {
-                    throw new IllegalStateException("CAS failed");
-                }
-                return true;
+    /** put an item in the ring buffer, blocking until space is available.
+     * @param t the item
+     * @throws InterruptedException if interrupted, or the ring buffer is closed
+     */
+    public synchronized void put(T t) throws InterruptedException {
+        while (true) {
+            if (ring[tail % size] != null) {
+                wait();
+            } else {
+                ring[tail % size] = t;
+                tail++;
+                notify();
+                return;
             }
         }
-
-        return false;
-    }
-    public void put(T t) {
-        // spin trying to place into the queue
-        while(!offer(t)) {
-            if(reader!=null) {
-                LockSupport.unpark(reader);
-            }
-//            Thread.yield(); // does not help
-//            LockSupport.parkNanos(1); // allows the program to work correctly
-        }
-        if(reader!=null) {
-            LockSupport.unpark(reader);
-        }
-    }
-    public T poll() {
-        T tmp = ring.getAndSet(head,null);
-        if(tmp==null)
-            return null;
-        head=next(head);
-        return tmp;
-    }
-    public T get() {
-        reader = Thread.currentThread();
-        try {
-            while (true) {
-                T t = poll();
-                if(t==null) {
-                    LockSupport.park();
-                } else {
-                    return t;
-                }
-            }
-        } finally {
-            reader=null;
-        }
-    }
-    private int next(int index) {
-        return (++index)%size;
     }
 
-    public boolean available() {
-        // available can only be called by reader so this is ok
-        return tail.get()!=head || ring.get(head)!=null;
+    /** returns the next item available from the ring buffer, blocking
+     * if not item is ready
+     * @return the item
+     * @throws InterruptedException if interrupted or the ring buffer is closed
+     */
+    public synchronized T get() throws InterruptedException {
+        while(true) {
+            T value = (T) ring[head%size];
+            if(value!=null) {
+                ring[head%size]=null;
+                head++;
+                notify();
+                return value;
+            } else {
+                wait();
+            }
+        }
     }
 }
