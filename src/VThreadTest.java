@@ -62,10 +62,15 @@ public class VThreadTest implements Runnable {
         counter.set(n_consumers+n_producers);
         for(int i=0;i<n_consumers;i++) {
             Consumer c = new Consumer(n_messages*n_producers);
+//            Thread t = new Thread(c,"Consumer");
+//            t.start();
             Thread.startVirtualThread(c);
             consumers.add(c);
         }
         for(int i=0;i<n_producers;i++) {
+            Producer p = new Producer(n_messages);
+//            Thread t = new Thread(p,"Producer");
+//            t.start();
             Thread.startVirtualThread(new Producer(n_messages));
         }
     }
