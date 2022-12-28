@@ -34,10 +34,13 @@ public class RingBuffer<T> {
         return false;
     }
     public void put(T t) {
+        // spin trying to place into the queue
         while(!offer(t)) {
             if(reader!=null) {
                 LockSupport.unpark(reader);
             }
+//            Thread.yield(); // does not help
+//            LockSupport.parkNanos(1); // allows the program to work correctly
         }
         if(reader!=null) {
             LockSupport.unpark(reader);
