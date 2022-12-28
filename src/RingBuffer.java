@@ -38,17 +38,30 @@ public class RingBuffer<T> {
      * @return the item
      * @throws InterruptedException if interrupted or the ring buffer is closed
      */
-    public synchronized T get() throws InterruptedException {
-        while(true) {
-            T value = (T) ring[head%size];
-            if(value!=null) {
-                ring[head%size]=null;
-                head++;
-                notify();
-                return value;
-            } else {
-                wait();
+    public T get() throws InterruptedException {
+        spin();
+        synchronized(this) {
+            while (true) {
+                T value = (T) ring[head % size];
+                if (value != null) {
+                    ring[head % size] = null;
+                    head++;
+                    notify();
+                    return value;
+                } else {
+                    wait();
+                }
             }
+        }
+    }
+
+    private void spin() {
+        for(int i=0;i<5000;i++) {
+            synchronized(this) {
+                if(head!=tail || ring[head%size]!=null)
+                    return;
+            }
+            Thread.yield();
         }
     }
 }
