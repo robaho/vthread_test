@@ -1,33 +1,41 @@
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class VThreadTest implements Runnable {
-    final RingBuffer<Object> queue = new RingBuffer<>(1024);
+public class VThreadTest {
     final List<Consumer> consumers = new ArrayList<>();
     final AtomicInteger counter = new AtomicInteger();
-
     volatile Thread main;
 
-    @Override
-    public void run() {
-        main = Thread.currentThread();
+    private class Producer implements Runnable {
+        private final int n_messages;
 
-        while(true) {
-            try {
-                Object o = queue.get();
+        public Producer(int n_messages) {
+            this.n_messages = n_messages;
+        }
+        public void run() {
+            Random r = new Random();
+            for(int i=0;i<n_messages;i++) {
+                Object o = Integer.valueOf(r.nextInt(100));
                 for (Consumer c : consumers) {
-                    c.submit(o);
+                    try {
+                        c.submit(o);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
                 }
-            } catch (InterruptedException e) {
-                // expected when all consumers and producers complete
-                return;
             }
+            if(counter.decrementAndGet()==0)
+                main.interrupt();;
         }
     }
 
     private class Consumer implements Runnable {
         private final int n_messages;
+//        private final BlockingQueue<Object> queue = new ArrayBlockingQueue<>(16);
         private final RingBuffer<Object> queue = new RingBuffer<>(16);
         public Consumer(int n_messages) {
             this.n_messages = n_messages;
@@ -36,7 +44,7 @@ public class VThreadTest implements Runnable {
         public void run() {
             for(int i=0;i<n_messages;i++) {
                 try {
-                    Object o = queue.get();
+                    Object o = queue.take();
                 } catch (InterruptedException e) {
                     throw new RuntimeException(e);
                 }
@@ -49,40 +57,27 @@ public class VThreadTest implements Runnable {
             queue.put(o);
         }
     }
-    private class Producer implements Runnable {
-        final int n_messages;
-        public Producer(int n_messages) {
-            this.n_messages = n_messages;
-        }
-
-        @Override
-        public void run() {
-            for(int i=0;i<n_messages;i++) {
-                queue.put(new Object());
-            }
-            System.out.println("producer finished");
-            if(counter.decrementAndGet()==0)
-                main.interrupt();;
-        }
-    }
     public VThreadTest(int n_producers, int n_consumers, int n_messages) {
+        main=Thread.currentThread();
         counter.set(n_consumers+n_producers);
         for(int i=0;i<n_consumers;i++) {
             Consumer c = new Consumer(n_messages*n_producers);
+            consumers.add(c);
+        }
+        for(Consumer c : consumers) {
 //            Thread t = new Thread(c,"Consumer");
 //            t.start();
             Thread.startVirtualThread(c);
-            consumers.add(c);
         }
         for(int i=0;i<n_producers;i++) {
             Producer p = new Producer(n_messages);
 //            Thread t = new Thread(p,"Producer");
 //            t.start();
-            Thread.startVirtualThread(new Producer(n_messages));
+            Thread.startVirtualThread(p);
         }
     }
 
-    public static void main(String[] args) throws InterruptedException {
+    public static void main(String[] args) {
         if(args.length !=3)
             throw new IllegalArgumentException("usage: VThreadTest n_producers n_consumers n_messages");
 
@@ -90,12 +85,17 @@ public class VThreadTest implements Runnable {
         int n_consumers = Integer.parseInt(args[1]);
         int n_messages = Integer.parseInt(args[2]);
 
-        VThreadTest m = new VThreadTest(n_producers,n_consumers,n_messages);
-//        Thread t = Thread.startVirtualThread(m);
         long start = System.currentTimeMillis();
-        Thread t = new Thread(m,"VThreadTest");
-        t.start();
-        t.join();
+        VThreadTest m = new VThreadTest(n_producers,n_consumers,n_messages);
+        try {
+            synchronized (VThreadTest.class) {
+                VThreadTest.class.wait();
+            }
+        } catch (InterruptedException e) {}
+        if(m.counter.get()!=0) {
+            throw new IllegalStateException("counter is not 0");
+        }
+
         System.out.format("time = %.3f",((System.currentTimeMillis()-start)/1000.0));
     }
 }

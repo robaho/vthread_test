@@ -1,3 +1,6 @@
+import java.util.LinkedList;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReferenceArray;
 import java.util.concurrent.locks.LockSupport;
@@ -12,15 +15,40 @@ public class RingBuffer<T> {
     private int head;
     private final AtomicInteger tail = new AtomicInteger();
     private final int size;
-
     private volatile Thread reader;
+    private final WaitList waiters = new WaitList();
+    private final int SPIN_COUNT=32;
+
+    private static class WaitList {
+        private final LinkedList<Thread> list = new LinkedList<>();
+        private final AtomicBoolean lock = new AtomicBoolean();
+        void add(Thread thread) {
+            while(!lock.compareAndSet(false,true));
+            list.add(thread);
+            lock.set(false);
+        }
+        Thread peek() {
+            while(!lock.compareAndSet(false,true));
+            try {
+                return list.peek();
+            } finally {
+                lock.set(false);
+            }
+        }
+        void remove(Thread thread) {
+            while(!lock.compareAndSet(false,true));
+            list.remove(thread);
+            lock.set(false);
+        }
+    }
+
 
     public RingBuffer(int size){
         ring = new AtomicReferenceArray<>(size);
         this.size=size;
     }
 
-    public boolean offer(T t) {
+    private boolean offer(T t) {
         int _tail = tail.get();
         int _next_tail = next(_tail);
         if(ring.get(_tail)==null && _next_tail!=head){
@@ -35,27 +63,37 @@ public class RingBuffer<T> {
         return false;
     }
     public void put(T t) {
-        // spin trying to place into the queue
-        while(!offer(t)) {
-            if(reader!=null) {
+        for(int i=0;i<SPIN_COUNT;i++) {
+            if (offer(t)) {
                 LockSupport.unpark(reader);
+                return;
             }
-//            Thread.yield(); // does not help - works under jdk 20
-            LockSupport.parkNanos(1); // allows the program to work correctly
         }
-        if(reader!=null) {
-            LockSupport.unpark(reader);
+        waiters.add(Thread.currentThread());
+        while(true) {
+            if(offer(t)) {
+                waiters.remove(Thread.currentThread());
+                LockSupport.unpark(reader);
+                return;
+            }
+            LockSupport.park();
         }
     }
-    public T poll() {
+    private T poll() {
         T tmp = ring.getAndSet(head,null);
         if(tmp==null)
             return null;
         head=next(head);
         return tmp;
     }
-    public T get() throws InterruptedException {
-//        spin();
+    public T take() throws InterruptedException {
+        for(int i=0;i<SPIN_COUNT;i++) {
+            T t = poll();
+            if(t!=null) {
+                LockSupport.unpark(waiters.peek());
+                return t;
+            }
+        }
         reader = Thread.currentThread();
         try {
             while (true) {
@@ -65,6 +103,7 @@ public class RingBuffer<T> {
                         throw new InterruptedException();
                     LockSupport.park();
                 } else {
+                    LockSupport.unpark(waiters.peek());
                     return t;
                 }
             }
@@ -74,14 +113,5 @@ public class RingBuffer<T> {
     }
     private int next(int index) {
         return (++index)%size;
-    }
-
-    private void spin() {
-        for(int i=0;i<1000;i++) {
-            if (tail.get() != head || ring.get(head) != null) {
-                return;
-            }
-            LockSupport.parkNanos(1);
-        }
     }
 }
